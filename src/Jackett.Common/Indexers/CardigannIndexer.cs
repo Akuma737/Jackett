@@ -228,137 +228,174 @@ namespace Jackett.Common.Indexers
             {
                 variables = getTemplateVariablesFromConfigData();
             }
-
-            // handle re_replace expression
-            // Example: {{ re_replace .Query.Keywords "[^a-zA-Z0-9]+" "%" }}
-            Regex ReReplaceRegex = new Regex(@"{{\s*re_replace\s+(\..+?)\s+""(.*?)""\s+""(.*?)""\s*}}");
-            var ReReplaceRegexMatches = ReReplaceRegex.Match(template);
-
-            while (ReReplaceRegexMatches.Success)
+            Regex getFirst = new Regex(@"{{ ?([\.\w]+)");
+            var getFirstMatch = getFirst.Match(template);
+            string longFunc = "if|join|range";
+            string nested = @"(?:(?>(?'bracket'{{)|(?'-bracket'}})|(?'endFunc'(?<={{)\s*(?>" + longFunc + @"))|(?'-endFunc'(?<={{)\s*end\s*(?=}}))|.)*)(?(bracket)(?!))(?(endFunc)(?!))";
+            while (getFirstMatch.Success)
             {
-                string all = ReReplaceRegexMatches.Groups[0].Value;
-                string variable = ReReplaceRegexMatches.Groups[1].Value;
-                string regexp = ReReplaceRegexMatches.Groups[2].Value;
-                string newvalue = ReReplaceRegexMatches.Groups[3].Value;
-
-                Regex ReplaceRegex = new Regex(regexp);
-                var input = (string)variables[variable];
-                var expanded = ReplaceRegex.Replace(input, newvalue);
-
-                if (modifier != null)
-                    expanded = modifier(expanded);
-
-                template = template.Replace(all, expanded);
-                ReReplaceRegexMatches = ReReplaceRegexMatches.NextMatch();
-            }
-
-            // handle join expression
-            // Example: {{ join .Categories "," }}
-            Regex JoinRegex = new Regex(@"{{\s*join\s+(\..+?)\s+""(.*?)""\s*}}");
-            var JoinMatches = JoinRegex.Match(template);
-
-            while (JoinMatches.Success)
-            {
-                string all = JoinMatches.Groups[0].Value;
-                string variable = JoinMatches.Groups[1].Value;
-                string delimiter = JoinMatches.Groups[2].Value;
-
-                var input = (ICollection<string>)variables[variable];
-                var expanded = string.Join(delimiter, input);
-
-                if (modifier != null)
-                    expanded = modifier(expanded);
-
-                template = template.Replace(all, expanded);
-                JoinMatches = JoinMatches.NextMatch();
-            }
-
-            // handle if ... else ... expression
-            Regex IfElseRegex = new Regex(@"{{\s*if\s*(.+?)\s*}}(.*?){{\s*else\s*}}(.*?){{\s*end\s*}}");
-            var IfElseRegexMatches = IfElseRegex.Match(template);
-
-            while (IfElseRegexMatches.Success)
-            {
-                string conditionResult = null;
-
-                string all = IfElseRegexMatches.Groups[0].Value;
-                string condition = IfElseRegexMatches.Groups[1].Value;
-                string onTrue = IfElseRegexMatches.Groups[2].Value;
-                string onFalse = IfElseRegexMatches.Groups[3].Value;
-
-                if (condition.StartsWith("."))
+                switch (getFirstMatch.Groups[1].Value)
                 {
-                    var conditionResultState = false;
-                    var value = variables[condition];
+                    case "if":
+                        // handle if ... else ... expression
+                        Regex IfElseRegex = new Regex(@"{{\s*if\s*(.+?)\s*}}(" + nested + @"){{\s*else\s*}}(" + nested + @"){{\s*end\s*}}");
+                        var IfElseRegexMatches = IfElseRegex.Match(template);
 
-                    if (value == null)
-                        conditionResultState = false;
-                    else if (value is string)
-                        conditionResultState = !string.IsNullOrWhiteSpace((string)value);
-                    else if (value is ICollection)
-                        conditionResultState = ((ICollection)value).Count > 0;
-                    else
-                        throw new Exception(string.Format("Unexpceted type for variable {0}: {1}", condition, value.GetType()));
+                        if (IfElseRegexMatches.Success)
+                        {
+                            string conditionResult = null;
 
-                    if (conditionResultState)
-                    {
-                        conditionResult = onTrue;
-                    }
-                    else
-                    {
-                        conditionResult = onFalse;
-                    }
+                            string all = IfElseRegexMatches.Groups[0].Value;
+                            string condition = IfElseRegexMatches.Groups[1].Value;
+                            string onTrue = IfElseRegexMatches.Groups[2].Value;
+                            string onFalse = IfElseRegexMatches.Groups[3].Value;
+
+                            if (condition.StartsWith("."))
+                            {
+                                var conditionResultState = false;
+                                var value = variables[condition];
+
+                                if (value == null)
+                                    conditionResultState = false;
+                                else if (value is string)
+                                    conditionResultState = !string.IsNullOrWhiteSpace((string)value);
+                                else if (value is ICollection)
+                                    conditionResultState = ((ICollection)value).Count > 0;
+                                else
+                                    throw new Exception(string.Format("Unexpceted type for variable {0}: {1}", condition, value.GetType()));
+
+                                if (conditionResultState)
+                                {
+                                    conditionResult = onTrue;
+                                }
+                                else
+                                {
+                                    conditionResult = onFalse;
+                                }
+                            }
+                            else
+                            {
+                                throw new NotImplementedException("CardigannIndexer: Condition operation '" + condition + "' not implemented");
+                            }
+                            template = template.Replace(all, conditionResult);
+                        }
+                        else
+                        {
+                            throw new ArgumentException("CardigannIndexer: If statement could not be properly matched");
+                        }
+                        break;
+                    case "re_replace":
+                        // handle re_replace expression
+                        // Example: {{ re_replace .Query.Keywords "[^a-zA-Z0-9]+" "%" }}
+                        Regex ReReplaceRegex = new Regex(@"{{\s*re_replace\s+(\..+?)\s+""(.*?)""\s+""(.*?)""\s*}}");
+                        var ReReplaceRegexMatches = ReReplaceRegex.Match(template);
+
+                        if (ReReplaceRegexMatches.Success)
+                        {
+                            string all = ReReplaceRegexMatches.Groups[0].Value;
+                            string variable = ReReplaceRegexMatches.Groups[1].Value;
+                            string regexp = ReReplaceRegexMatches.Groups[2].Value;
+                            string newvalue = ReReplaceRegexMatches.Groups[3].Value;
+
+                            Regex ReplaceRegex = new Regex(regexp);
+                            var input = (string)variables[variable];
+                            var expanded = ReplaceRegex.Replace(input, newvalue);
+
+                            if (modifier != null)
+                                expanded = modifier(expanded);
+
+                            template = template.Replace(all, expanded);
+                        }
+                        else
+                        {
+                            throw new ArgumentException("CardigannIndexer: ReReplace statement could not be properly matched");
+                        }
+                        break;
+                    case "join":
+                        // handle join expression
+                        // Example: {{ join .Categories "," }}
+                        Regex JoinRegex = new Regex(@"{{\s*join\s+(\..+?)\s+""(.*?)""\s*}}");
+                        var JoinMatches = JoinRegex.Match(template);
+
+                        if (JoinMatches.Success)
+                        {
+                            string all = JoinMatches.Groups[0].Value;
+                            string variable = JoinMatches.Groups[1].Value;
+                            string delimiter = JoinMatches.Groups[2].Value;
+
+                            var input = (ICollection<string>)variables[variable];
+                            var expanded = string.Join(delimiter, input);
+
+                            if (modifier != null)
+                                expanded = modifier(expanded);
+
+                            template = template.Replace(all, expanded);
+                        }
+                        else
+                        {
+                            throw new ArgumentException("CardigannIndexer: Join statement could not be properly matched");
+                        }
+                        break;
+                    case "range":
+                        // handle range expression
+                        Regex RangeRegex = new Regex(@"{{\s*range\s*(.+?)\s*}}(.*?){{\.}}(.*?){{end}}");
+                        var RangeRegexMatches = RangeRegex.Match(template);
+
+                        if (RangeRegexMatches.Success)
+                        {
+                            string expanded = string.Empty;
+
+                            string all = RangeRegexMatches.Groups[0].Value;
+                            string variable = RangeRegexMatches.Groups[1].Value;
+                            string prefix = RangeRegexMatches.Groups[2].Value;
+                            string postfix = RangeRegexMatches.Groups[3].Value;
+
+                            foreach (string value in (ICollection<string>)variables[variable])
+                            {
+                                var newvalue = value;
+                                if (modifier != null)
+                                    newvalue = modifier(newvalue);
+                                expanded += prefix + newvalue + postfix;
+                            }
+                            template = template.Replace(all, expanded);
+                        }
+                        else
+                        {
+                            throw new ArgumentException("CardigannIndexer: Range statement could not be properly matched");
+                        }
+                        break;
+                    default:
+                        if (getFirstMatch.Groups[1].Value.StartsWith("."))
+                        {
+                            // handle simple variables
+                            Regex VariablesRegEx = new Regex(@"{{\s*(\..+?)\s*}}");
+                            var VariablesRegExMatches = VariablesRegEx.Match(template);
+
+                            if (VariablesRegExMatches.Success)
+                            {
+                                string expanded = string.Empty;
+
+                                string all = VariablesRegExMatches.Groups[0].Value;
+                                string variable = VariablesRegExMatches.Groups[1].Value;
+
+                                string value = (string)variables[variable];
+                                if (modifier != null)
+                                    value = modifier(value);
+                                template = template.Replace(all, value);
+                            }
+                            else
+                            {
+                                throw new ArgumentException("CardigannIndexer: Variable statement could not be properly matched");
+                            }
+                        }
+                        else
+                        {
+                            throw new ArgumentException("CardigannIndexer: Function '" + getFirstMatch.Groups[1].Value + "' not implemented");
+                        }
+                        break;
                 }
-                else
-                {
-                    throw new NotImplementedException("CardigannIndexer: Condition operation '" + condition + "' not implemented");
-                }
-                template = template.Replace(all, conditionResult);
-                IfElseRegexMatches = IfElseRegexMatches.NextMatch();
+                getFirstMatch = getFirst.Match(template);
             }
-
-            // handle range expression
-            Regex RangeRegex = new Regex(@"{{\s*range\s*(.+?)\s*}}(.*?){{\.}}(.*?){{end}}");
-            var RangeRegexMatches = RangeRegex.Match(template);
-
-            while (RangeRegexMatches.Success)
-            {
-                string expanded = string.Empty;
-
-                string all = RangeRegexMatches.Groups[0].Value;
-                string variable = RangeRegexMatches.Groups[1].Value;
-                string prefix = RangeRegexMatches.Groups[2].Value;
-                string postfix = RangeRegexMatches.Groups[3].Value;
-
-                foreach (string value in (ICollection<string>)variables[variable])
-                {
-                    var newvalue = value;
-                    if (modifier != null)
-                        newvalue = modifier(newvalue);
-                    expanded += prefix + newvalue + postfix;
-                }
-                template = template.Replace(all, expanded);
-                RangeRegexMatches = RangeRegexMatches.NextMatch();
-            }
-
-            // handle simple variables
-            Regex VariablesRegEx = new Regex(@"{{\s*(\..+?)\s*}}");
-            var VariablesRegExMatches = VariablesRegEx.Match(template);
-
-            while (VariablesRegExMatches.Success)
-            {
-                string expanded = string.Empty;
-
-                string all = VariablesRegExMatches.Groups[0].Value;
-                string variable = VariablesRegExMatches.Groups[1].Value;
-
-                string value = (string)variables[variable];
-                if (modifier != null)
-                    value = modifier(value);
-                template = template.Replace(all, value);
-                VariablesRegExMatches = VariablesRegExMatches.NextMatch();
-            }
-
             return template;
         }
 
